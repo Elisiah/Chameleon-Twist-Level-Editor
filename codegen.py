@@ -29,12 +29,13 @@ class Kind:
     section: str = "objects"         # "objects", "actors", "collectables", "sprites"
 
 
+# Kind catalog – derived from game data and enums.h.
 # Objects (RoomObject)
-# Actors (RoomActor)
-# Collectables (Collectable)
-# Sprites (SpriteActor)
+# Actors (RoomActor) – ids from actorIDs enum in enums.h
+# Collectables (Collectable) – ids from collectable types (R_HEART, CROWN, etc.)
+# Sprites (SpriteActor) – ids from SPRITE enum
 KINDS: Dict[str, Kind] = {
-    # Objects
+    # ========== Objects (RoomObject) ==========
     "static_mesh":           Kind(id=0x00, section="objects"),
     "moving_platform":       Kind(id=0x05, extras=("keyframes",), keyframes_variant="_keyframe", section="objects"),
     "tilt_platform":         Kind(id=0x06, extras=("axis", "angle"), section="objects"),
@@ -64,7 +65,7 @@ KINDS: Dict[str, Kind] = {
     "boss_trigger":          Kind(id=0x23, section="objects"),
     "checkpoint_flag":       Kind(id=0x24, section="objects"),
 
-    # Actors
+    # ========== Actors (RoomActor) ==========
     "red_ant":                Kind(id=0x01, section="actors"),
     "green_ant":              Kind(id=0x02, section="actors"),
     "grey_ant":               Kind(id=0x03, section="actors"),
@@ -150,7 +151,7 @@ KINDS: Dict[str, Kind] = {
     "falling_grey_ant":       Kind(id=0x5E, section="actors"),
     "unk_fire_spawner":       Kind(id=0x5F, section="actors"),
 
-    # Collectables
+    # ========== Collectables (Collectable) ==========
     "r_heart":                Kind(id=0x60, section="collectables"),
     "falling_r_heart":        Kind(id=0x61, section="collectables"),
     "o_heart":                Kind(id=0x62, section="collectables"),
@@ -163,7 +164,8 @@ KINDS: Dict[str, Kind] = {
     "shrink_power_up":        Kind(id=0x69, section="collectables"),
     "shrink_enemy_power_up":  Kind(id=0x6A, section="collectables"),
 
-    # Sprites
+    # ========== Sprites (SpriteActor) ==========
+    # Sprite kinds will have their type (sprite ID) specified in the entry.
     "sprite":                 Kind(id=0, section="sprites"),  # id unused, will come from entry["sprite_type"]
 }
 
@@ -171,7 +173,8 @@ KINDS: Dict[str, Kind] = {
 UNK14_BUFFER_CAP = 131072
 
 
-# Validation
+# ---------- validation ----------
+
 @dataclass
 class ValidationError:
     path: str
@@ -262,7 +265,8 @@ def validate_manifest(manifest: dict, report: ManifestReport) -> None:
                     validate_object(obj, f"{path_room}.{section}.append[{i}]", known_models, report)
 
 
-# Vanilla extractor
+# ---------- vanilla extractor ----------
+
 SECTION_PATTERNS: List[Tuple[str, str]] = [
     (r"^StageModel\s+(\w+)\[\]\s*=\s*\{",                   "stage_models"),
     (r"^unsigned\s+char\s+(\w+_rabobjects_Bin)\[\]\s*=\s*\{","rabobjects"),
@@ -287,11 +291,11 @@ _ROOM_SECTION_SUFFIX: Dict[str, str] = {
 
 @dataclass
 class Section:
-    kind: str           
-    name: str           
-    start_line: int     
-    end_line: int       
-    text: str           
+    kind: str           # tag from SECTION_PATTERNS
+    name: str           # C symbol
+    start_line: int     # 1-based, inclusive
+    end_line: int       # 1-based, inclusive (the line containing the closing `};`)
+    text: str           # verbatim source including the opening line and `};`
 
 
 def extract_sections(c_source: str) -> List[Section]:
@@ -353,15 +357,19 @@ def parse_stage_models(stage_models_text: str) -> List[str]:
     return [m.group(1) for m in re.finditer(r"\{\s*(\w+)_Gfx\b", stage_models_text)]
 
 
-# Formatting functions for each section
+# ---------- formatting functions for each section ----------
+
+#{ {674.2863, 212.1338, -0.0000}, {122.5846, 122.5846, 122.5846}, 0, 0.0, 7, 0, 0.0, 0.0, 0.0, 0.0, 0, 0, 0, 0, 0, 0, 99, -1, -1, -1, NULL, NULL, 0, 0, 2, 4, 4, 0, -1, 0, 0 },
+        
+
 RO_FIELD_DEFAULTS: Dict[str, str] = {
     "unk18": "0", "damages": "0.0",
     "unk20": "7", "unk24": "0",
-    "unk28": "1400.0", "unk2C": "1000.0", "unk30": "-1000.0", "unk34": "0.0",
-    "keyframes_temp": "0", "noKeyframes": "90",
-    "unk40": "0", "unk44": "1000", "unk48": "0", "unk4C": "0",
+    "unk28": "0.0", "unk2C": "0.0", "unk30": "0.0", "unk34": "0.0",
+    "keyframes_temp": "0", "noKeyframes": "0",
+    "unk40": "0", "unk44": "0", "unk48": "0", "unk4C": "0",
     "unk54": "-1", "unk58": "-1", "unk5C": "-1",
-    "unk68": "0", "unk6C": "0",
+    "unk68": "0", "unk6C": "0", "unk70": "2",
     "unk74": "4", "unk78": "4", "unk7C": "0",
     "unk80": "-1", "unk84": "0", "unk88": "0",
 }
@@ -389,7 +397,8 @@ def format_room_object(entry: dict, model_ref: object, dispatch_id: int) -> str:
         f["unk54"], f["unk58"], f["unk5C"],
         "NULL", "NULL",                  # 0x60/0x64 func1/func2 : bound at load
         f["unk68"], f["unk6C"],
-        f"0x{dispatch_id:02X}",          # 0x70 dispatch type
+        #f"0x{dispatch_id:02X}",          # 0x70 dispatch type
+        f["unk70"],
         f["unk74"], f["unk78"], f["unk7C"], f["unk80"], f["unk84"], f["unk88"],
     ]
     return "    { " + ", ".join(fields) + " },\n"
@@ -397,6 +406,8 @@ def format_room_object(entry: dict, model_ref: object, dispatch_id: int) -> str:
 
 def format_room_actor(entry: dict) -> str:
     # RoomActor struct: { actorID, {x,y,z}, angle, unk1, unk2, unk3, unk4, unk5, unk6, unk7, ... }
+    # For now, produce a minimal placeholder. In reality, fields must be mapped from manifest.
+    # We'll assume the manifest provides all necessary fields.
     kind = entry["kind"]
     kind_info = KINDS.get(kind)
     if not kind_info:
@@ -404,7 +415,8 @@ def format_room_actor(entry: dict) -> str:
     actor_id = kind_info.id
     pos = entry.get("pos", [0,0,0])
     angle = entry.get("angle", 0.0)
-
+    # Default values for other 19 fields; can be overridden via entry extras.
+    # This is a simplified example – you'd need to read full struct definition.
     fields = [
         f"{actor_id}",
         f"{{{pos[0]:.4f}, {pos[1]:.4f}, {pos[2]:.4f}}}",
@@ -426,13 +438,14 @@ def format_collectable(entry: dict) -> str:
 
 def format_sprite(entry: dict) -> str:
     # SpriteActor struct: { sprite_type, sprite_id, {x,y,z}, {w,h,d}, unk1, unk2, angle, flags, ... }
+    # For simplicity, we'll generate a basic one. Adjust as needed.
     sprite_type = entry.get("sprite_type", 0)
     sprite_id = entry.get("sprite_id", 0)
     pos = entry.get("pos", [0,0,0])
     scale = entry.get("scale", [1,1,1])
     angle = entry.get("angle", 0.0)
     flags = entry.get("flags", 0)
-
+    # Many more fields; use defaults for now.
     return f"    {{{sprite_type}, {sprite_id}, {{{pos[0]:.4f}, {pos[1]:.4f}, {pos[2]:.4f}}}, {{{scale[0]:.4f}, {scale[1]:.4f}, {scale[2]:.4f}}}, 1, 0, {angle:.4f}, {flags}, 0, 0, 0, 0, {{0,0,0,0}}}},\n"
 
 
@@ -443,7 +456,12 @@ _SENTINEL_RE = re.compile(
 
 
 def splice_before_sentinel(section_text: str, new_literals: List[str]) -> str:
-    """Insert new_literals before the null-terminator sentinel in a C array."""
+    """Insert new_literals before the null-terminator sentinel in a C array.
+
+    Searches backward so we find the actual terminator at the end, not an
+    earlier entry that happens to sit at the origin with zero scale.
+    Falls back to inserting before the closing `};` if no sentinel is found.
+    """
     if not new_literals:
         return section_text
     lines = section_text.splitlines(keepends=True)
@@ -474,7 +492,7 @@ def splice_stage_models_append(stage_models_text: str, appended: List[dict]) -> 
     return prefix + "\n" + new_entries + stage_models_text[idx:]
 
 
-# Emit
+# ---------- emit ----------
 
 EMIT_HEADER = """\
 /* generated by tools/LevelEditor/codegen.py : do not edit */
@@ -499,14 +517,17 @@ def emit(manifest: dict, manifest_path: Path, out_path: Path, report: ManifestRe
     for s in sections:
         sections_by_kind.setdefault(s.kind, []).append(s)
 
+    # Compute early — needed by section 2 (#define) and section 5 (model index lookup).
     sm = sections_by_kind.get("stage_models", [])
     vanilla_models = parse_stage_models(sm[0].text) if sm else []
 
     out: List[str] = [EMIT_HEADER.format(manifest_path=manifest_path.name, land=land)]
+
+    # 1. extern decls : copy vanilla's leading block verbatim.
     out.append("/* --- 1. extern decls (copied from vanilla) --- */\n")
     out.append(collect_extern_decls(vanilla))
 
-    # includes and ARRAY_COUNT define.
+    # 2. mod asset includes and ARRAY_COUNT define.
     if appended:
         out.append(f"\n#define ARRAY_COUNT_VANILLA_STAGEMODELS {len(vanilla_models)}\n")
         out.append("\n/* --- 2. appended-mod asset includes --- */\n")
@@ -523,7 +544,7 @@ def emit(manifest: dict, manifest_path: Path, out_path: Path, report: ManifestRe
             out.append(f"#define {m['name'].upper()}_MODEL  (ARRAY_COUNT_VANILLA_STAGEMODELS + {i})\n")
         out.append("\n")
 
-    # merged stageModels[]
+    # 3. merged stageModels[] : splice appended entries.
     out.append("/* --- 3. stageModels[] (vanilla + appended) --- */\n")
     if not sm:
         report.errors.append(ValidationError("vanilla", f"no StageModel array found in {vanilla_path.name}"))
@@ -531,16 +552,19 @@ def emit(manifest: dict, manifest_path: Path, out_path: Path, report: ManifestRe
         out.append(splice_stage_models_append(sm[0].text, appended))
         out.append("\n")
 
+    # 4. rabobjects_Bin : verbatim.
     rb = sections_by_kind.get("rabobjects", [])
     if rb:
         out.append("/* --- 4. rabobjects_Bin (copied verbatim) --- */\n")
         out.append(rb[0].text)
         out.append("\n")
 
+    # 5. Room placement arrays: objects, actors, collectables, sprites.
     appended_names = [m["name"] for m in appended]
     all_models = vanilla_models + appended_names
 
     # Build raw_replace overrides for each section
+    # Room key is "<variant><num>" e.g. "1", "ext_1". Split into variant + number.
     raw_overrides: Dict[str, str] = {}
     for room_key, room_patch in rooms.items():
         km = re.match(r'^([a-z_]*)(\d+)$', str(room_key))
@@ -557,8 +581,10 @@ def emit(manifest: dict, manifest_path: Path, out_path: Path, report: ManifestRe
         label = section_kind.replace("_", " ").title()
         out.append(f"/* --- {label} --- */\n")
         for s in sections_list:
+            # Collect literals from manifest's append lists for this specific array
             new_literals: List[str] = []
             # The array name is e.g. AntLand_room0_objects or JungleLand_ext_room1_objects.
+            # Extract variant + number and look up by the combined key used in the manifest.
             room_match = re.search(r"_([a-z_]*)room(\d+)_", s.name)
             if room_match:
                 room_key = room_match.group(1) + room_match.group(2)  # e.g. "ext_1" or "1"
@@ -566,6 +592,8 @@ def emit(manifest: dict, manifest_path: Path, out_path: Path, report: ManifestRe
                 append_list = room_patch.get(suffix, {}).get("append", [])
                 if append_list:
                     # For each entry in the append list, format according to its kind's section
+                    # However, the manifest should already have entries only in the correct section,
+                    # but double-check by section_kind.
                     for entry in append_list:
                         kind_info = KINDS.get(entry["kind"])
                         if not kind_info:
@@ -592,12 +620,13 @@ def emit(manifest: dict, manifest_path: Path, out_path: Path, report: ManifestRe
                             new_literals.append(format_collectable(entry))
                         elif suffix == "sprites":
                             new_literals.append(format_sprite(entry))
-            # raw_replace takes precedence, else append-spliced version
+            # Determine final text: raw_replace takes precedence, else append-spliced version
             base = raw_overrides.get(s.name, s.text)
             final_text = splice_before_sentinel(base, new_literals) if new_literals else base
             out.append(final_text)
             out.append("\n")
 
+    # 6. Remaining sections (room_instances, rmset, map_data, scope, stage_data) – verbatim.
     for kind in ("room_instances", "rmset", "map_data", "scope", "stage_data"):
         for s in sections_by_kind.get(kind, []):
             out.append(s.text)
@@ -606,6 +635,7 @@ def emit(manifest: dict, manifest_path: Path, out_path: Path, report: ManifestRe
     out_path.write_text("".join(out))
 
 
+# ---------- vanilla gating ----------
 
 def gate_vanilla(c_source: str, sections: List[Section], mod_include_relpath: str) -> str:
     lines = c_source.splitlines(keepends=True)
@@ -644,6 +674,7 @@ def prepare_mod(manifest_path: Path, build_root: Path, report: ManifestReport) -
     return gated_path, mod_inc_path
 
 
+# ---------- driver ----------
 
 def main(argv: List[str] | None = None) -> int:
     p = argparse.ArgumentParser(description="Chameleon Twist mod manifest codegen")

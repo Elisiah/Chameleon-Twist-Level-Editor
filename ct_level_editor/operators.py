@@ -3,6 +3,7 @@
 import re
 import bpy
 import bmesh
+import mathutils
 from pathlib import Path
 
 from . import manifest_export, room_import, room_export, visual_import
@@ -481,6 +482,27 @@ class CT_OT_import_room(bpy.types.Operator):
                     obj.scale = room_import.ct_scale_to_blender(ct_scale)
                     obj["ct_original_scale"] = list(ct_scale)
 
+            axis = 0
+            angle_rad = 0.0
+            if len(fields) > 3:
+                try:
+                    axis = int(fields[2].strip())       # unk18
+                    angle_rad = room_import.parse_rotation_rad(fields[3])  # damages
+                except (ValueError, IndexError):
+                    axis = 0
+                    angle_rad = 0.0
+
+            euler = mathutils.Euler((0.0, 0.0, 0.0))
+            if axis == 1:
+                euler.x = angle_rad
+            elif axis == 2:
+                euler.z = angle_rad
+            elif axis == 3:
+                euler.y = -angle_rad
+            obj.rotation_euler = euler
+            obj["ct_original_axis"] = axis
+            obj["ct_original_angle_rad"] = angle_rad
+
             if len(fields) > room_import.ROOM_OBJECT_MODEL_FIELD:
                 raw_id = fields[room_import.ROOM_OBJECT_MODEL_FIELD].strip()
                 if raw_id:
@@ -785,6 +807,7 @@ class CT_OT_export_gfx(bpy.types.Operator):
         # reverses it after, so we don't need to touch the object transform.
         context.scene.DLExportPath = str(land_manifests_dir) + "/"
         context.scene.DLName = override
+        context.scene.blenderF3DScale = 1.0
         context.scene.DLExportisStatic = True
 
         bpy.ops.object.select_all(action="DESELECT")

@@ -5,3 +5,5 @@ __pycache__/
 # Ignore the manifests folder and all its contents
 manifests/
 roundtrip/
+
+*.zip

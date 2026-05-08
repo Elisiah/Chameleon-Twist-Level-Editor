@@ -12,6 +12,7 @@ build a Blender Mesh tagged with is_collision=True.
 
 from __future__ import annotations
 import re
+import math
 from pathlib import Path
 
 
@@ -358,3 +359,19 @@ def iter_object_model_placements(
                 pl["scale"] = scale
         result.append(pl)
     return result
+
+
+_RADIANS_MACRO = re.compile(r"DEGREES_TO_RADIANS_2PI\s*\(\s*(-?\d+(?:\.\d+)?)\s*\)", re.IGNORECASE)
+
+def parse_rotation_rad(field_text: str) -> float:
+    """Parse the damages field, returning radians.
+
+    Handles DEGREES_TO_RADIANS_2PI(deg) and raw floats.
+    """
+    t = field_text.strip()
+    m = _RADIANS_MACRO.match(t)
+    if m:
+        deg = float(m.group(1))
+        return math.radians(deg)
+    # raw float
+    return float(t.rstrip("fF"))

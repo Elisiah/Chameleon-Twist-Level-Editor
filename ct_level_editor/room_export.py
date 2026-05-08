@@ -102,6 +102,7 @@ def _replace_nth_vec3(raw: str, n: int, new_vec: tuple[float, float, float]) -> 
 
 _MOVE_THRESHOLD = 0.001  # units; below this we treat the object as unmoved
 _SCALE_THRESHOLD = 0.0001
+_ROTATION_THRESHOLD = 1e-6
 
 # Templates for newly spawned entries that have no ct_raw_entry yet.
 _ACTOR_TEMPLATE = (
@@ -151,11 +152,27 @@ def _entry_for_new_object(obj: bpy.types.Object) -> str:
         kf_temp = str(dir_map.get(ct.exit_direction, 0))
         no_kf = str(ct.exit_target_arg)
 
+    euler = obj.rotation_euler.copy()
+    rot_thresh = 0.0001
+    axis = 0
+    angle_rad = 0.0
+    if abs(euler.x) > rot_thresh:
+        axis = 1
+        angle_rad = euler.x
+    elif abs(euler.z) > rot_thresh:
+        axis = 2
+        angle_rad = euler.z
+    elif abs(euler.y) > rot_thresh:
+        axis = 3
+        angle_rad = -euler.y   # Blender Y = -CT Z rotation
+
     pos_s   = f"{{{pos[0]:.4f}, {pos[1]:.4f}, {pos[2]:.4f}}}"
     scale_s = f"{{{scale[0]:.4f}, {scale[1]:.4f}, {scale[2]:.4f}}}"
     fields  = [
         pos_s, scale_s,
-        "0", "0.0", "7", "0",
+        str(axis),
+        f"{angle_rad:.6f}f",
+        "7", "0",
         "1400.0", "1000.0", "-1000.0", "0.0",
         kf_temp, no_kf,
         "0", "1000", "0", "0",
@@ -203,6 +220,28 @@ def _entry_for_obj(obj: bpy.types.Object) -> str:
             rescaled = True
         if rescaled:
             raw = _replace_nth_vec3(raw, 1, ct_scale)  # vec3 block index 1 = scale field
+
+    if array_kind == "objects":
+        orig_axis = obj.get("ct_original_axis")
+        orig_angle = obj.get("ct_original_angle_rad")
+
+        euler = obj.rotation_euler.copy()
+        thresh = 0.0001
+        new_axis = 0
+        new_angle = 0.0
+        if abs(euler.x) > thresh:
+            new_axis = 1
+            new_angle = euler.x
+        elif abs(euler.z) > thresh:
+            new_axis = 2
+            new_angle = euler.z
+        elif abs(euler.y) > thresh:
+            new_axis = 3
+            new_angle = -euler.y
+
+        if orig_axis is None or new_axis != orig_axis or abs(new_angle - (orig_angle or 0.0)) > _ROTATION_THRESHOLD:
+            raw = _replace_field(raw, 2, str(new_axis))
+            raw = _replace_field(raw, 3, f"{new_angle:.6f}f")
 
     # other
     raw = _maybe_patch_id(obj, array_kind, raw)
