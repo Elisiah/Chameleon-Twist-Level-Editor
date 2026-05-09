@@ -22,11 +22,21 @@ LEVELGROUP_DIR = REPO_ROOT / "src" / "levelGroup"
 
 
 @dataclass(frozen=True)
+class AuxArray:
+    c_struct: str
+    suffix: str  # format string: takes {idx}
+    pointer_field_index: int
+    count_field_index: int
+
+
+@dataclass(frozen=True)
 class Kind:
     id: int
     extras: Tuple[str, ...] = ()
-    keyframes_variant: str = "none"  # "none", "_keyframe", "_Vtx", "temp"
-    section: str = "objects"         # "objects", "actors", "collectables", "sprites"
+    keyframes_variant: str = "none"
+    section: str = "objects"
+    ro_overrides: Tuple[Tuple[int, str], ...] = ()
+    aux_array: AuxArray | None = None
 
 
 # Kind catalog – derived from game data and enums.h.
@@ -51,7 +61,21 @@ KINDS: Dict[str, Kind] = {
     "spiked_platform":       Kind(id=0x10, section="objects"),
     "floating_object":       Kind(id=0x11, section="objects"),
     "fixed_cam_trigger":     Kind(id=0x12, section="objects"),
-    "platform_keyframed":    Kind(id=0x13, extras=("keyframes",), keyframes_variant="_keyframe", section="objects"),
+    "moving_platform_linear": Kind(id=0x05, section="objects"),
+    "fluid_edge_collide":    Kind(id=0x00, section="objects"),
+    "fluid_passthrough":     Kind(id=0x00, section="objects"),
+    "platform_keyframed":    Kind(
+        id=0x13,
+        extras=("keyframes",),
+        section="objects",
+        ro_overrides=((4, "7"), (5, "10"), (21, "&func_800D90B8"), (24, "7")),
+        aux_array=AuxArray(
+            c_struct="PlatformKeyframe",
+            suffix="platform{idx}_keyframes",
+            pointer_field_index=10,
+            count_field_index=11,
+        ),
+    ),
     "exit_trigger":          Kind(id=0x17, extras=("direction", "target_arg"), keyframes_variant="temp", section="objects"),
     "door":                  Kind(id=0x19, extras=("direction", "bounds", "target_arg"), keyframes_variant="temp", section="objects"),
     "shutter":               Kind(id=0x1A, section="objects"),
@@ -237,6 +261,17 @@ def validate_object(obj: dict, path: str, known_models: set[str], report: Manife
         if extra not in obj:
             report.errors.append(ValidationError(path, f"kind {kind_name!r} requires field {extra!r}"))
 
+    if kind.aux_array:
+        kfs = obj.get("keyframes")
+        if not isinstance(kfs, list) or not kfs:
+            report.errors.append(ValidationError(path, "keyframes must be a non-empty list"))
+        else:
+            for i, kf in enumerate(kfs):
+                if not isinstance(kf, dict) or not _vec3(kf.get("pos")):
+                    report.errors.append(ValidationError(f"{path}.keyframes[{i}]", "missing pos:[x,y,z]"))
+                if not isinstance(kf.get("hold_frames", 0), int):
+                    report.errors.append(ValidationError(f"{path}.keyframes[{i}]", "hold_frames must be int"))
+
 
 def validate_manifest(manifest: dict, report: ManifestReport) -> None:
     if manifest.get("schema_version") != 0:
@@ -377,12 +412,15 @@ RO_FIELD_DEFAULTS: Dict[str, str] = {
 EXIT_DIRECTION_MAP: Dict[str, int] = {"N": 0, "E": 1, "S": 2, "W": 3}
 
 
-def format_room_object(entry: dict, model_ref: object, dispatch_id: int) -> str:
+def format_room_object(entry: dict, model_ref: object, dispatch_id: int, aux_symbol: str | None = None) -> str:
     f = dict(RO_FIELD_DEFAULTS)
-    kind = entry["kind"]
-    if kind in ("exit_trigger", "door"):
+    kind_name = entry["kind"]
+    if kind_name in ("exit_trigger", "door"):
         f["keyframes_temp"] = str(EXIT_DIRECTION_MAP.get(entry.get("direction", "N"), 0))
         f["noKeyframes"] = str(entry.get("target_arg", 0))
+
+    for c_name, val in entry.get("fields", {}).items():
+        f[c_name] = str(val)
 
     pos = entry["pos"]
     scale = entry["scale"]
@@ -393,15 +431,42 @@ def format_room_object(entry: dict, model_ref: object, dispatch_id: int) -> str:
         f["unk28"], f["unk2C"], f["unk30"], f["unk34"],
         f["keyframes_temp"], f["noKeyframes"],
         f["unk40"], f["unk44"], f["unk48"], f["unk4C"],
-        str(model_ref),                  # 0x50 id  ← model index
+        str(model_ref),
         f["unk54"], f["unk58"], f["unk5C"],
-        "NULL", "NULL",                  # 0x60/0x64 func1/func2 : bound at load
+        "NULL", "NULL",
         f["unk68"], f["unk6C"],
-        #f"0x{dispatch_id:02X}",          # 0x70 dispatch type
         f["unk70"],
         f["unk74"], f["unk78"], f["unk7C"], f["unk80"], f["unk84"], f["unk88"],
     ]
+
+    kind = KINDS.get(kind_name)
+    if kind:
+        for idx, val in kind.ro_overrides:
+            if 0 <= idx < len(fields):
+                fields[idx] = val
+        if kind.aux_array and aux_symbol:
+            fields[kind.aux_array.pointer_field_index] = f"(s32){aux_symbol}"
+            fields[kind.aux_array.count_field_index] = f"ARRAY_COUNT({aux_symbol})"
+
     return "    { " + ", ".join(fields) + " },\n"
+
+
+def format_aux_array(kind: Kind, symbol: str, entry: dict) -> str:
+    """Emit a sibling C array (e.g. PlatformKeyframe) for a kind with aux_array."""
+    keyframes = entry.get("keyframes", [])
+    lines = [f"{kind.aux_array.c_struct} {symbol}[{len(keyframes)}] = {{\n"]
+    for kf in keyframes:
+        p = kf["pos"]
+        flags = list(kf.get("flags", [0, 0, 0, 0, 0]))
+        while len(flags) < 5:
+            flags.append(0)
+        hold = int(kf.get("hold_frames", 0))
+        lines.append(
+            f"    {{{{{p[0]:.4f}, {p[1]:.4f}, {p[2]:.4f}}}, "
+            f"{flags[0]}, {hold}, {flags[1]}, {flags[2]}, {flags[3]}, {flags[4]}}},\n"
+        )
+    lines.append("};\n\n")
+    return "".join(lines)
 
 
 def format_room_actor(entry: dict) -> str:
@@ -573,7 +638,6 @@ def emit(manifest: dict, manifest_path: Path, out_path: Path, report: ManifestRe
             sym = f"{land}_{rv}room{rn}_{suffix}"
             raw_overrides[sym] = c_text
 
-    # Process each of the four placement sections
     for section_kind, suffix in _ROOM_SECTION_SUFFIX.items():
         sections_list = sections_by_kind.get(section_kind, [])
         if not sections_list:
@@ -581,20 +645,16 @@ def emit(manifest: dict, manifest_path: Path, out_path: Path, report: ManifestRe
         label = section_kind.replace("_", " ").title()
         out.append(f"/* --- {label} --- */\n")
         for s in sections_list:
-            # Collect literals from manifest's append lists for this specific array
             new_literals: List[str] = []
-            # The array name is e.g. AntLand_room0_objects or JungleLand_ext_room1_objects.
-            # Extract variant + number and look up by the combined key used in the manifest.
+            aux_blocks: List[str] = []
             room_match = re.search(r"_([a-z_]*)room(\d+)_", s.name)
             if room_match:
-                room_key = room_match.group(1) + room_match.group(2)  # e.g. "ext_1" or "1"
+                rv, rn = room_match.group(1), room_match.group(2)
+                room_key = rv + rn
                 room_patch = rooms.get(room_key, {})
                 append_list = room_patch.get(suffix, {}).get("append", [])
                 if append_list:
-                    # For each entry in the append list, format according to its kind's section
-                    # However, the manifest should already have entries only in the correct section,
-                    # but double-check by section_kind.
-                    for entry in append_list:
+                    for entry_idx, entry in enumerate(append_list):
                         kind_info = KINDS.get(entry["kind"])
                         if not kind_info:
                             continue
@@ -603,7 +663,6 @@ def emit(manifest: dict, manifest_path: Path, out_path: Path, report: ManifestRe
                                 f"manifest {suffix}.append",
                                 f"entry kind '{entry['kind']}' has section '{kind_info.section}' but placed in '{suffix}' – ignoring"))
                             continue
-                        # Format based on section
                         if suffix == "objects":
                             model_sym = entry["model"]
                             if model_sym in all_models:
@@ -613,16 +672,22 @@ def emit(manifest: dict, manifest_path: Path, out_path: Path, report: ManifestRe
                                     f"room {room_key} objects.append",
                                     f"model {model_sym!r} not in stageModels; emitting symbol verbatim"))
                                 model_ref = model_sym
-                            new_literals.append(format_room_object(entry, model_ref, kind_info.id))
+                            aux_symbol = None
+                            if kind_info.aux_array:
+                                base_name = entry.get("name") or kind_info.aux_array.suffix.format(idx=entry_idx)
+                                aux_symbol = f"{land}_{rv}room{rn}_{base_name}"
+                                aux_blocks.append(format_aux_array(kind_info, aux_symbol, entry))
+                            new_literals.append(format_room_object(entry, model_ref, kind_info.id, aux_symbol))
                         elif suffix == "actors":
                             new_literals.append(format_room_actor(entry))
                         elif suffix == "collectables":
                             new_literals.append(format_collectable(entry))
                         elif suffix == "sprites":
                             new_literals.append(format_sprite(entry))
-            # Determine final text: raw_replace takes precedence, else append-spliced version
             base = raw_overrides.get(s.name, s.text)
             final_text = splice_before_sentinel(base, new_literals) if new_literals else base
+            if aux_blocks:
+                out.append("".join(aux_blocks))
             out.append(final_text)
             out.append("\n")
 

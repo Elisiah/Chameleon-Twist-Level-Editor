@@ -14,7 +14,7 @@ Conventions:
 bl_info = {
     "name": "Chameleon Twist Level Editor",
     "author": "CT decomp modding",
-    "version": (0, 1, 0),
+    "version": (0, 2, 0),
     "blender": (4, 1, 0),
     "location": "View3D > Sidebar > CT",
     "description": "Author levels and objects for the Chameleon Twist N64 decomp",

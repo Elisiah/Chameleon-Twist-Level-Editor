@@ -1,24 +1,20 @@
-"""Blender mesh -> CT collision asset (single self-contained .collision.c file).
+"""Blender mesh -> CT collision asset (.collision.c).
 
-Coordinate convention:
-    Blender (X, Y, Z, Z-up, RH)  ->  CT (X, Z, -Y, Y-up, RH)
-
-Output is a single `<name>.collision.c` containing four decls:
-    Vec3f          <name>_colVerts[N]
-    Vec3w          <name>_colTris[M]
-    Rect3D         <name>_boundBox
-    ModelCollision <name>_collision
+All exports are in object-local space so visual + collision align at the
+object origin. The engine adds the RoomObject `pos` (and any tween offset)
+at runtime, matching the fast64 visual export convention.
 """
 
 from pathlib import Path
 
 
 def blender_to_ct(co) -> tuple[float, float, float]:
-    """Apply axis swap. `co` is a Blender Vector or 3-tuple."""
+    """Convert Blender (X,Y,Z) to CT engine coordinates (X, Z, -Y)."""
     return (co[0], co[2], -co[1])
 
 
 def _write_collision_c(verts, tris, name: str, out_path: Path) -> dict:
+    """Write a .collision.c file containing vertex/triangle arrays and bounding box."""
     if not verts or not tris:
         raise ValueError(f"collision asset {name!r} has no triangles")
 
@@ -62,19 +58,14 @@ def _write_collision_c(verts, tris, name: str, out_path: Path) -> dict:
 
 
 def emit_collision(mesh_obj, name: str, out_path: Path) -> dict:
-    """Triangulate the mesh, apply world transform, and write a .collision.c."""
-    mesh = mesh_obj.data
-    mesh.calc_loop_triangles()
-    mat = mesh_obj.matrix_world
-    verts = [blender_to_ct((mat @ v.co)) for v in mesh.vertices]
-    tris = [(t.vertices[0], t.vertices[1], t.vertices[2]) for t in mesh.loop_triangles]
-    return _write_collision_c(verts, tris, name, out_path)
-
-
-def emit_collision_modelspace(mesh_obj, name: str, out_path: Path) -> dict:
-    """Like emit_collision but exports in model-local space (no world transform)."""
+    """Extract mesh data from a Blender object and export as a CT collision asset (.collision.c).
+    Does **not** apply any object transform – all vertices remain in object-local space.
+    """
     mesh = mesh_obj.data
     mesh.calc_loop_triangles()
     verts = [blender_to_ct(v.co) for v in mesh.vertices]
     tris = [(t.vertices[0], t.vertices[1], t.vertices[2]) for t in mesh.loop_triangles]
     return _write_collision_c(verts, tris, name, out_path)
+
+
+emit_collision_modelspace = emit_collision # alias kept for backwards compat
