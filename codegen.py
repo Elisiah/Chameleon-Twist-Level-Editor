@@ -63,7 +63,11 @@ KINDS: Dict[str, Kind] = {
     "fixed_cam_trigger":     Kind(id=0x12, section="objects"),
     "moving_platform_linear": Kind(id=0x05, section="objects"),
     "fluid_edge_collide":    Kind(id=0x00, section="objects"),
-    "fluid_passthrough":     Kind(id=0x00, section="objects"),
+    "skybox":                Kind(
+        id=0x00,
+        section="objects",
+        ro_overrides=((4, "7"), (5, "20"), (9, "1.0"), (24, "0")),
+    ),
     "platform_keyframed":    Kind(
         id=0x13,
         extras=("keyframes",),

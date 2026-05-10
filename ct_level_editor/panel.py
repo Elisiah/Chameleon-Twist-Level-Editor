@@ -167,20 +167,18 @@ class CT_PT_object(bpy.types.Panel):
             return
 
         n = len(keys)
-        holds = list(obj.get("ct_keyframe_holds", []))
-        if len(holds) != n:
-            holds = (holds + [0] * n)[:n]
-            obj["ct_keyframe_holds"] = holds
-
         box.label(text=f"{n} waypoints (auto-synced from F-curves):", icon="ANIM_DATA")
         for i, (f, p) in enumerate(keys):
             ct_p = properties._bl_to_ct(p)
             row = box.row(align=True)
             row.label(text=f"WP{i}  f{int(f)}")
             row.label(text=f"({ct_p[0]:.0f}, {ct_p[1]:.0f}, {ct_p[2]:.0f})")
-            row.prop(obj, '["ct_keyframe_holds"]', index=i, text="hold")
+            if i < n - 1:
+                travel = max(1, int(round(keys[i + 1][0] - f)))
+                row.label(text=f"-> {travel / properties.GAME_FPS:.2f}s")
 
         box.separator()
+        box.prop(obj.ct, "keyframed_return_sec", text="Hold Before Return (s)")
         box.operator("ct.seed_keyframed_platform", text="Add Default Path", icon="ADD")
 
     def _draw_export_gfx_button(self, layout, obj, land):

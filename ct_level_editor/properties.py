@@ -106,10 +106,39 @@ def get_sprite_items(self, context) -> list:
     return _sprite_items_cache
 
 
+def _set_kf_return_sec(self, value):
+    obj = self.id_data
+    holds = list(obj.get("ct_keyframe_holds", []))
+    if not holds:
+        return
+    holds[-1] = int(round(value * GAME_FPS))
+    obj["ct_keyframe_holds"] = holds
+
+
 def _sync_room_id(self, context):
     """Keep the object's custom property 'ct_room_id' in sync with the UI property."""
     if context and context.active_object:
         context.active_object["ct_room_id"] = self.room_id
+
+
+def _flip_mesh_normals(obj):
+    """Flip every face normal once. Marks `ct_skybox_normals_flipped` so re-assigning
+    the skybox kind doesn't double-flip back to outward-facing."""
+    if obj.type != "MESH" or obj.data is None or obj.mode == "EDIT":
+        return
+    if obj.get("ct_skybox_normals_flipped"):
+        return
+    import bmesh
+    me = obj.data
+    bm = bmesh.new()
+    bm.from_mesh(me)
+    for f in bm.faces:
+        f.normal_flip()
+    bm.normal_update()
+    bm.to_mesh(me)
+    bm.free()
+    me.update()
+    obj["ct_skybox_normals_flipped"] = 1
 
 
 def _kind_update(self, context):
@@ -131,6 +160,8 @@ def _kind_update(self, context):
                 obj[prop_name] = float(f.default)
             else:
                 obj[prop_name] = f.default
+    if self.kind == "skybox":
+        _flip_mesh_normals(obj)
 
 
 def _update_platform_times(self, context, is_time1):
@@ -201,6 +232,12 @@ class CTObjectProps(bpy.types.PropertyGroup):
         name="Time to Return (s)", default=0.0, min=0.0,
         update=lambda self, ctx: _update_platform_times(self, ctx, is_time1=False))
 
+    keyframed_return_sec: bpy.props.FloatProperty(
+        name="Return (s)", min=0.0,
+        get=lambda self: (list(self.id_data.get("ct_keyframe_holds", []))[-1] / GAME_FPS)
+            if self.id_data.get("ct_keyframe_holds") else 0.0,
+        set=lambda self, v: _set_kf_return_sec(self, v))
+
 
 class CTSceneProps(bpy.types.PropertyGroup):
     land: bpy.props.StringProperty(name="Land", default="AntLand")
@@ -232,14 +269,16 @@ def _sync_linear_platform(obj):
 
 
 def _sync_keyframed_platform(obj):
+    """Hold semantics: holds[i] for i<n-1 is travel length to next waypoint
+    (synced from f-curve frame deltas). holds[n-1] is the user-set return time."""
     keys = location_keyframes(obj)
     n = len(keys)
-    holds = list(obj.get("ct_keyframe_holds", []))
-    if len(holds) != n:
-        if len(holds) < n:
-            holds = holds + [0] * (n - len(holds))
-        else:
-            holds = holds[:n]
+    prev = list(obj.get("ct_keyframe_holds", []))
+    holds = (prev + [0] * n)[:n] if len(prev) != n else list(prev)
+    for i in range(n - 1):
+        delta = max(1, int(round(keys[i + 1][0] - keys[i][0])))
+        holds[i] = delta
+    if holds != prev:
         obj["ct_keyframe_holds"] = holds
 
 

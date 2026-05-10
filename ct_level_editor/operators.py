@@ -466,14 +466,16 @@ def _import_platform_animation(obj, fields: list, source: str) -> None:
             obj.animation_data.action = bpy.data.actions.new(name=f"{obj.name}_Path")
         holds: list[int] = []
         frame_cursor = 0
-        for entry in kf_entries:
+        n = len(kf_entries)
+        for i, entry in enumerate(kf_entries):
             bl = room_import.ct_position_to_blender(entry["pos"])
             obj.location = bl
             obj.keyframe_insert(data_path="location", frame=frame_cursor)
             scalars = entry.get("scalars", [])
-            hold = scalars[1] if len(scalars) > 1 else 0
-            holds.append(int(hold))
-            frame_cursor += max(1, int(hold) // 2 if hold else 60)
+            hold = int(scalars[1]) if len(scalars) > 1 else 0
+            holds.append(hold)
+            if i < n - 1:
+                frame_cursor += max(1, hold)
         obj["ct_keyframe_holds"] = holds
         obj.location = room_import.ct_position_to_blender(kf_entries[0]["pos"])
         return

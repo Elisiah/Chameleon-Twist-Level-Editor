@@ -62,30 +62,24 @@ KIND_REGISTRY: list[KindDef] = [
     ),
     KindDef(
         id="fluid_edge_collide",
-        label="Fluid Edge Collide (Lava)",
+        label="Fluid (Lava / Water)",
         dispatch=0x07,
         fields=[
             KindField(4, "unk24", "Behaviour", "int", default="21", in_struct=True),
             KindField(9, "unk34", "Movement Speed", "float", default="1.0", min=0, max=5, in_struct=True),
-            KindField(24, "unk70", "Collision Type", "enum",
+            KindField(24, "unk70", "Collision", "enum",
                       default="0",
-                      enum_items=[("0", "Passthrough", ""),
-                                  ("2", "Solid Edges", "")],
+                      enum_items=[("0", "No Collision", ""),
+                                  ("2", "Collision", "")],
                       in_struct=True),
         ]
     ),
     KindDef(
-        id="fluid_passthrough",
-        label="Fluid Pass‑through (Water)",
+        id="skybox",
+        label="Sky Box",
         dispatch=0x07,
-        fields=[
-            KindField(4, "unk20", "Behaviour", "int", default="20", in_struct=True),
-            KindField(9, "unk34", "Movement Speed", "float", default="0.5", min=0, max=5, in_struct=True),
-            KindField(24, "unk70", "Collision Type", "enum",
-                      default="2",
-                      enum_items=[("2", "Water (pass‑through)", "")],
-                      in_struct=True),
-        ]
+        ro_overrides={4: "7", 5: "20", 9: "1.0", 24: "0"},
+        fields=[]
     ),
     KindDef(
         id="pole_grabbable",
