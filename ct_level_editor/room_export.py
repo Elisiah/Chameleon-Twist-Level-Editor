@@ -114,7 +114,15 @@ def _entry_for_new_object(obj: bpy.types.Object) -> str:
 
     model = ""
     if ct:
-        model = ct.model_enum.strip() if ct.model_enum else ct.model_name.strip()
+        override = _override_symbol(ct)
+        if override and not override.startswith("_") and not _IS_VANILLA_ID.match(override):
+            model = (
+                _model_name_to_define(override)
+                if not override.endswith("_MODEL")
+                else override
+            )
+        elif ct.model_enum:
+            model = ct.model_enum.strip()
     if not model:
         model = "0"
 
@@ -156,7 +164,7 @@ def _entry_for_new_object(obj: bpy.types.Object) -> str:
     return ", ".join(fields)
 
 
-def _entry_for_obj(obj: bpy.types.Object) -> str:
+def _entry_for_obj(obj: bpy.types.Object, appended_model_names: set | None = None) -> str:
     raw: str = obj.get("ct_raw_entry", "")
     array_kind: str = obj.get("ct_array_kind", "objects")
 
@@ -204,7 +212,7 @@ def _entry_for_obj(obj: bpy.types.Object) -> str:
             raw = _replace_field(raw, 2, str(new_axis))
             raw = _replace_field(raw, 3, f"{new_angle:.6f}f")
 
-    raw = _maybe_patch_id(obj, array_kind, raw)
+    raw = _maybe_patch_id(obj, array_kind, raw, appended_model_names)
     raw = _patch_kind_fields(obj, array_kind, raw)
     return raw
 
@@ -235,15 +243,30 @@ def _patch_kind_fields(obj, array_kind: str, raw: str) -> str:
     return raw
 
 
-def _maybe_patch_id(obj: bpy.types.Object, array_kind: str, raw: str) -> str:
+def _override_symbol(ct) -> str:
+    """Mirror of manifest_export._appended_model_symbol: prefer model_id_override
+    but fall back to model_name so the rename-vanilla-to-replace workflow lands
+    a single canonical symbol regardless of which UI field the user touched."""
+    candidate = (getattr(ct, "model_id_override", "") or "").strip()
+    if not candidate:
+        candidate = (getattr(ct, "model_name", "") or "").strip()
+    return candidate
+
+
+def _maybe_patch_id(obj: bpy.types.Object, array_kind: str, raw: str, appended_model_names: set | None = None) -> str:
     ct = getattr(obj, "ct", None)
     if ct is None:
         return raw
     if array_kind == "objects":
-        override = getattr(ct, "model_id_override", "").strip()
+        override = _override_symbol(ct)
         if override and not override.startswith("_"):
             if not _IS_VANILLA_ID.match(override) and not override.endswith("_MODEL"):
-                new_id = _model_name_to_define(override)
+                # Only emit NAME_MODEL if a matching appended model actually exists.
+                # Otherwise fall back to model_enum (vanilla model reference).
+                if appended_model_names is None or override in appended_model_names:
+                    new_id = _model_name_to_define(override)
+                else:
+                    new_id = ct.model_enum.strip() if ct.model_enum else ""
             else:
                 new_id = override
         else:
@@ -316,26 +339,46 @@ def _has_sentinel(entries: list[str], suffix: str = "objects") -> bool:
     return False
 
 
-def emit_room_arrays_for_mod(land: str, room_id: int, room_variant: str = "") -> dict[str, str]:
+def emit_room_arrays_for_mod(
+    land: str,
+    room_id: int,
+    room_variant: str = "",
+    appended_model_names: set | None = None,
+    force_all: bool = False,
+) -> dict[str, str]:
+    """Build raw_replace text for every populated section of a room.
+
+    When `force_all` is True, also emit a sentinel-only stub for any of the
+    four section suffixes that have no live Blender objects. This is what
+    closes the "ghost vanilla object" hole: if the user deletes the last
+    placement in a room, the corresponding `<land>_<v>room<n>_<suffix>` array
+    is still overridden (with just a null terminator) rather than falling back
+    to the vanilla source verbatim. Codegen silently ignores override symbols
+    that don't match a real vanilla section, so it's safe to stub all four.
+    """
     buckets = _collect_room_buckets(land, room_id, room_variant)
     result: dict[str, str] = {}
 
     for suffix, objs in buckets.items():
-        if not objs:
-            continue
         struct = _STRUCT_TYPE[suffix]
         sym = f"{land}_{room_variant}room{room_id}_{suffix}"
         entries: list[str] = []
         for obj in objs:
             array_kind = obj.get("ct_array_kind", "")
             if array_kind or obj.get("ct_raw_entry"):
-                entry = _entry_for_obj(obj)
+                entry = _entry_for_obj(obj, appended_model_names)
             else:
                 entry = _entry_for_new_object(obj)
             if entry:
                 entries.append(entry)
 
         if not entries:
+            if not force_all:
+                continue
+            sentinel = _NULL_SENTINELS.get(suffix, "")
+            if not sentinel:
+                continue
+            result[suffix] = f"{struct} {sym}[] = {{\n    {{{sentinel}}},\n}};\n"
             continue
 
         sentinel = _NULL_SENTINELS.get(suffix, "")

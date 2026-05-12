@@ -327,6 +327,44 @@ class CT_OT_export_mod(bpy.types.Operator):
         return {"FINISHED"}
 
 
+def _load_imported_rooms(scene) -> list[tuple[str, int]]:
+    """Return the list of (variant, room_id) the user has imported into this
+    .blend, as recorded on `scene.ct.imported_rooms_json`."""
+    import json as _json
+    raw = scene.ct.imported_rooms_json or "[]"
+    try:
+        data = _json.loads(raw)
+    except _json.JSONDecodeError:
+        return []
+    out: list[tuple[str, int]] = []
+    seen: set[tuple[str, int]] = set()
+    for entry in data:
+        if not isinstance(entry, dict):
+            continue
+        key = (str(entry.get("variant", "")), int(entry.get("room_id", 0)))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(key)
+    return out
+
+
+def _record_imported_room(scene, variant: str, room_id: int) -> None:
+    """Persist (variant, room_id) on the scene so a subsequent full-mod export
+    will always emit a raw_replace for that room — even if the user deletes
+    every Blender object in it, which would otherwise let codegen fall back to
+    the vanilla section ("ghost objects")."""
+    import json as _json
+    rooms = _load_imported_rooms(scene)
+    key = (str(variant or ""), int(room_id))
+    if key in rooms:
+        return
+    rooms.append(key)
+    scene.ct.imported_rooms_json = _json.dumps(
+        [{"variant": v, "room_id": r} for v, r in rooms]
+    )
+
+
 def _seed_kind_field_defaults(obj) -> None:
     """Populate the custom property fields (ct_field_*) on an object with the kind's default values,
     if they don't already exist.
@@ -690,6 +728,8 @@ class CT_OT_import_room(bpy.types.Operator):
 
                 spawned_empties += 1
 
+        _record_imported_room(scene, self.room_variant, self.room_id)
+
         self.report(
             {"INFO"},
             f"Imported {spawned_objects} mesh placements + {spawned_empties} actor/item/sprite empties for {land} room {self.room_id}"
@@ -831,11 +871,22 @@ class CT_OT_export_full_mod(bpy.types.Operator):
                 variant = obj.get("ct_room_variant", "")
                 touched_rooms.add((str(variant), int(room_id)))
 
+        # Imported rooms that no longer have any Blender objects still need a
+        # raw_replace override; otherwise vanilla "ghosts" survive the build.
+        imported_rooms = set(_load_imported_rooms(scene))
+        export_rooms = touched_rooms | imported_rooms
+
+        appended_names = {m["name"] for m in manifest.get("stageModels", {}).get("append", [])}
         rooms_block = manifest.setdefault("rooms", {})
         total_rooms = 0
-        for room_variant, room_id in sorted(touched_rooms):
+        for room_variant, room_id in sorted(export_rooms):
+            force_all = (room_variant, room_id) in imported_rooms
             try:
-                replacements = room_export.emit_room_arrays_for_mod(land, room_id, room_variant)
+                replacements = room_export.emit_room_arrays_for_mod(
+                    land, room_id, room_variant,
+                    appended_model_names=appended_names,
+                    force_all=force_all,
+                )
             except Exception as e:
                 self.report({"WARNING"}, f"Room {room_variant}{room_id} export failed: {e}")
                 continue

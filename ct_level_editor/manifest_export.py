@@ -29,6 +29,86 @@ def _sanitize_symbol(name: str, land: str) -> str:
     return cleaned
 
 
+_VANILLA_LIKE = _re.compile(r"^\d+$")
+
+
+def _appended_model_symbol(ct) -> str:
+    """Resolve the C symbol a mesh wants registered as an appended StageModel.
+
+    Prefer the explicit `model_id_override`; fall back to `model_name` so that
+    the rename-vanilla-to-replace workflow works regardless of which UI field
+    the user filled in. Returns "" when the value is empty, looks like a
+    vanilla reference (numeric / ENUM-style), or is a Gfx-suffixed name.
+    """
+    candidate = (getattr(ct, "model_id_override", "") or "").strip()
+    if not candidate:
+        candidate = (getattr(ct, "model_name", "") or "").strip()
+    if not candidate:
+        return ""
+    if candidate.startswith("_") or candidate.endswith("_MODEL"):
+        return ""
+    if _VANILLA_LIKE.match(candidate):
+        return ""
+    return candidate
+
+
+def _resolve_visual_gfx_reference(obj, sym: str, asset_dir: Path) -> dict:
+    """Pick the right gfx pointer for an appended visual model.
+
+    Three cases, in priority order:
+      1. fast64 has already emitted `model.inc.c` in the asset dir -> use the
+         generated symbol; codegen will `#include` it.
+      2. The object came from a vanilla import (has `ct_original_model_sym`) and
+         the user has not re-exported the gfx -> alias the new `<sym>_Gfx` to
+         the original vanilla `<orig>_Gfx`. Lets "rename-to-replace" round-trip
+         without forcing a fast64 export when geometry was not edited.
+      3. Neither -> emit an extern declaration only; codegen will warn at link
+         time. Caller must run "Export Gfx" before the build will succeed.
+    """
+    model_inc = asset_dir / "model.inc.c"
+    if model_inc.exists():
+        mesh_name = obj.data.name if obj.data else obj.name
+        mesh_sym = "".join(c if c.isalnum() else "_" for c in mesh_name)
+        return {"gfx_entry": f"{sym}_{mesh_sym}_mesh"}
+
+    original = (obj.get("ct_original_model_sym") or "").strip()
+    if original and original != sym:
+        return {"gfx_alias": original}
+
+    return {}
+
+
+def _register_appended_visual_model(
+    obj,
+    sym: str,
+    land: str,
+    manifest_dir: Path,
+    appended_models: list[dict],
+    appended_model_names: set[str],
+    collision_summaries: list[dict],
+) -> bool:
+    """Emit the collision asset for an appended visual mesh and record the
+    manifest entry. Returns True if the model was registered.
+    """
+    asset_dir = manifest_dir / sym
+    collision_path = asset_dir / f"{sym}.collision.c"
+    try:
+        summary = collision_export.emit_collision(obj, sym, collision_path)
+    except Exception as e:
+        # Surface, do not swallow: this is the difference between "silently
+        # produces no enum entry" and a diagnosable user error.
+        print(f"[CT] collision export failed for {sym!r} on {obj.name!r}: {e}")
+        return False
+
+    entry: dict = {"name": sym, "collision": f"{sym}/{sym}"}
+    entry.update(_resolve_visual_gfx_reference(obj, sym, asset_dir))
+
+    appended_models.append(entry)
+    appended_model_names.add(sym)
+    collision_summaries.append({**summary, "name": sym})
+    return True
+
+
 def _sample_keyframes_for_export(obj) -> list[dict]:
     """For a `platform_keyframed` kind, read the object's location F-curves and
     pair each waypoint with its `ct_keyframe_holds[i]` scalar.
@@ -67,41 +147,27 @@ def export_scene(scene: bpy.types.Scene, manifest_dir: Path) -> dict:
         ct = obj.ct
         kind_def = kinds.KIND_REGISTRY_BY_ID.get(ct.kind)
 
-        if obj.type == "MESH" and obj.get("ct_array_kind") == "objects":
-            override = getattr(ct, "model_id_override", "").strip()
-            if override and not override.startswith("_") and not _re.match(r"^\d+$", override) and not override.endswith("_MODEL"):
-                if override not in appended_model_names:
-                    asset_dir = manifest_dir / override
-                    collision_path = asset_dir / f"{override}.collision.c"
-                    try:
-                        summary = collision_export.emit_collision_modelspace(obj, override, collision_path)
-                        collision_summaries.append({**summary, "name": override})
-                        appended_model_names.add(override)
-                        _gfx_obj = "".join(c if c.isalnum() else "_" for c in obj.name)
-                        appended_models.append({
-                            "name": override,
-                            "collision": f"{override}/{override}",
-                            "gfx_entry": f"{override}_{_gfx_obj}_mesh",
-                        })
-                    except Exception:
-                        pass
+        if obj.type == "MESH" and not ct.is_collision:
+            sym = _appended_model_symbol(ct)
+            if sym and sym not in appended_model_names:
+                _register_appended_visual_model(
+                    obj, sym, land, manifest_dir,
+                    appended_models, appended_model_names, collision_summaries,
+                )
             if not (kind_def and kind_def.aux_array):
                 continue
 
         if obj.type == "MESH" and ct.is_collision:
-            sym = ct.model_name or _sanitize_symbol(obj.name, land)
+            sym = _appended_model_symbol(ct) or _sanitize_symbol(obj.name, land)
             asset_dir = manifest_dir / sym
             collision_path = asset_dir / f"{sym}.collision.c"
             summary = collision_export.emit_collision(obj, sym, collision_path)
             collision_summaries.append({**summary, "name": sym})
             if sym not in appended_model_names:
                 appended_model_names.add(sym)
-                _gfx_obj = "".join(c if c.isalnum() else "_" for c in obj.name)
-                appended_models.append({
-                    "name": sym,
-                    "collision": f"{sym}/{sym}",
-                    "gfx_entry": f"{sym}_{_gfx_obj}_mesh",
-                })
+                entry: dict = {"name": sym, "collision": f"{sym}/{sym}"}
+                entry.update(_resolve_visual_gfx_reference(obj, sym, asset_dir))
+                appended_models.append(entry)
             if ct.kind not in kinds.KIND_REGISTRY_BY_ID:
                 continue
 
@@ -110,14 +176,15 @@ def export_scene(scene: bpy.types.Scene, manifest_dir: Path) -> dict:
 
         if ct.kind not in kinds.KIND_REGISTRY_BY_ID:
             continue
-        if obj.type == "MESH" and not ct.model_name and not (kind_def and kind_def.aux_array):
+        appended_sym = _appended_model_symbol(ct)
+        if obj.type == "MESH" and not appended_sym and not (kind_def and kind_def.aux_array):
             continue
 
         room_variant = obj.get("ct_room_variant", "")
         room_key = f"{room_variant}{ct.room_id}"
         room = rooms.setdefault(room_key, {"objects": {"append": []}})
 
-        model_sym = ct.model_name
+        model_sym = appended_sym
         if not model_sym:
             enum_val = getattr(ct, "model_enum", "")
             if enum_val and not enum_val.startswith("_"):

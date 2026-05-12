@@ -153,6 +153,7 @@ class CT_PT_object(bpy.types.Panel):
         manual.prop(obj, '["ct_field_unk2C"]', text="Target Y")
         manual.prop(obj, '["ct_field_unk30"]', text="Target Z")
         manual.prop(obj, '["ct_field_noKeyframes"]', text="Travel Frames")
+        manual.prop(obj, '["ct_field_unk44"]', text="Hold Frames")
         box.operator("ct.sync_moving_platform", icon="ANIM_DATA")
 
     def _draw_keyframed_platform(self, layout, obj):

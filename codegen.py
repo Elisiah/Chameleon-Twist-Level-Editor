@@ -605,6 +605,13 @@ def emit(manifest: dict, manifest_path: Path, out_path: Path, report: ManifestRe
                 # fast64-exported gfx: include the generated header + display list.
                 out.append(f'#include "tools/LevelEditor/manifests/{land}/{m["name"]}/header.h"\n')
                 out.append(f'#include "tools/LevelEditor/manifests/{land}/{m["name"]}/model.inc.c"\n')
+            elif m.get("gfx_alias"):
+                # Rename-vanilla-to-replace: reuse the original vanilla Gfx data
+                # under a fresh symbol so the new StageModel entry resolves.
+                alias = m["gfx_alias"]
+                alias_sym = alias if alias.endswith("_Gfx") else f"{alias}_Gfx"
+                out.append(f"extern Gfx {alias_sym}[];\n")
+                out.append(f"#define {m['name']}_Gfx {alias_sym}\n")
             else:
                 out.append(f"extern Gfx {m['name']}_Gfx[];\n")
             out.append(f'#include "tools/LevelEditor/manifests/{land}/{m["name"]}/{m["name"]}.collision.c"\n')
