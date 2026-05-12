@@ -67,7 +67,7 @@ def _resolve_visual_gfx_reference(obj, sym: str, asset_dir: Path) -> dict:
     """
     model_inc = asset_dir / "model.inc.c"
     if model_inc.exists():
-        mesh_name = obj.data.name if obj.data else obj.name
+        mesh_name = obj.name                        # F64 Gfx export does not name using .data so use .name only
         mesh_sym = "".join(c if c.isalnum() else "_" for c in mesh_name)
         return {"gfx_entry": f"{sym}_{mesh_sym}_mesh"}
 
